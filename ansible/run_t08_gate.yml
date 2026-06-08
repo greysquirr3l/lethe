@@ -59,7 +59,7 @@
           {{
             repo_url | regex_replace(
               '^https://',
-              'https://' ~ github_token_value ~ '@'
+              'https://x-access-token:' ~ github_token_value ~ '@'
             )
             if (
               (hostvars['localhost'].github_token_value | default('') | length) > 0
@@ -87,27 +87,17 @@
       environment:
         GIT_TERMINAL_PROMPT: "0"
         GIT_ASKPASS: "/bin/true"
-      async: 900
-      poll: 10
       no_log: true
-      register: git_checkout_result
-      failed_when: false
 
-    - name: Continue when repo has local modifications
-      ansible.builtin.debug:
-        msg: "Skipping git update due to local modifications; using existing checkout"
-      when: >-
-        git_checkout_result is failed and
-        ('Local modifications exist in the destination' in
-         (git_checkout_result.msg | default('')))
+    - name: Verify checkout has Cargo.toml
+      ansible.builtin.stat:
+        path: "{{ repo_dest }}/Cargo.toml"
+      register: cargo_toml_stat
 
-    - name: Fail on unexpected git errors
+    - name: Fail when checkout is incomplete
       ansible.builtin.fail:
-        msg: "Git checkout failed unexpectedly for {{ repo_dest }}"
-      when: >-
-        git_checkout_result is failed and
-        ('Local modifications exist in the destination' not in
-         (git_checkout_result.msg | default('')))
+        msg: "Repository checkout at {{ repo_dest }} is missing Cargo.toml"
+      when: not cargo_toml_stat.stat.exists
 
     - name: Ensure Rust toolchain is installed and up to date
       ansible.builtin.shell: |
