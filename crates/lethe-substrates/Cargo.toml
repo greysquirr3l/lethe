@@ -1,0 +1,19 @@
+[package]
+name = "lethe-substrates"
+description = "Substrate adapter implementations for Lethe"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+lethe-core.workspace = true
+rand_chacha.workspace = true
+rand_core.workspace = true
+
+[lints]
+workspace = true

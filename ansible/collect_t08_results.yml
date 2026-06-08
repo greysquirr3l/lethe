@@ -1,0 +1,64 @@
+---
+# Collect T08 gate artifacts from all fhn_runners.
+#
+# Usage:
+#   ansible-playbook -i ansible/inventory.ini ansible/collect_t08_results.yml
+
+- name: Collect T08 generalisation gate artifacts
+  hosts: fhn_runners
+  gather_facts: true
+
+  tasks:
+    - name: Derive architecture tag
+      ansible.builtin.set_fact:
+        arch_tag: "{{ 'arm64' if ansible_facts['architecture'] in ['aarch64', 'arm64'] else ('x86_64' if ansible_facts['architecture'] == 'x86_64' else ansible_facts['architecture']) }}"
+
+    - name: Build artifact list
+      ansible.builtin.set_fact:
+        result_artifacts:
+          - remote: "{{ repo_dest }}/results/decision.md"
+            local: "{{ playbook_dir }}/../results/{{ inventory_hostname }}_{{ arch_tag }}_decision.md"
+          - remote: "{{ repo_dest }}/results/{{ run_name }}.log"
+            local: "{{ playbook_dir }}/../results/{{ inventory_hostname }}_{{ arch_tag }}_{{ run_name }}.log"
+          - remote: "{{ repo_dest }}/results/{{ run_name }}_summary.json"
+            local: "{{ playbook_dir }}/../results/{{ inventory_hostname }}_{{ arch_tag }}_{{ run_name }}_summary.json"
+          - remote: "{{ repo_dest }}/results/{{ run_name }}_evidence.csv"
+            local: "{{ playbook_dir }}/../results/{{ inventory_hostname }}_{{ arch_tag }}_{{ run_name }}_evidence.csv"
+
+    - name: Check which artifacts exist on remote
+      ansible.builtin.stat:
+        path: "{{ item.remote }}"
+      loop: "{{ result_artifacts }}"
+      register: artifact_stats
+
+    - name: Ensure local results directory exists
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/../results"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    - name: Fetch available artifacts
+      ansible.builtin.fetch:
+        src: "{{ item.item.remote }}"
+        dest: "{{ item.item.local }}"
+        flat: true
+      loop: "{{ artifact_stats.results }}"
+      when: item.stat.exists
+
+    - name: Report missing artifacts
+      ansible.builtin.debug:
+        msg: "Not yet present on {{ inventory_hostname }}: {{ item.item.remote }}"
+      loop: "{{ artifact_stats.results }}"
+      when: not item.stat.exists
+
+    - name: Check if run is still active
+      ansible.builtin.shell: tmux has-session -t "{{ run_session }}" 2>/dev/null && echo "running" || echo "done"
+      args:
+        executable: /bin/bash
+      register: tmux_status
+      changed_when: false
+
+    - name: Report run status
+      ansible.builtin.debug:
+        msg: "{{ run_session }} on {{ inventory_hostname }} ({{ arch_tag }}): {{ tmux_status.stdout | trim }}"

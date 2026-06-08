@@ -1,0 +1,22 @@
+[package]
+name = "lethe-cli"
+description = "Command-line runner for Lethe experiments"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+lethe-model.workspace = true
+lethe-core.workspace = true
+lethe-substrates.workspace = true
+anyhow = "1.0"
+rand_chacha.workspace = true
+rand_core.workspace = true
+
+[lints]
+workspace = true

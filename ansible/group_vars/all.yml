@@ -1,0 +1,9 @@
+repo_url: https://github.com/greysquirr3l/lethe.git
+repo_version: main
+repo_dest: ~/lethe
+run_session: t08_gate
+run_name: t08_generalisation_gate
+
+# Replace with the exact T08 runner command once the gate harness is wired.
+# The command runs inside repo_dest and should write artifacts to results/.
+gate_command: "./target/release/lethe-cli gate --output-dir results --samples 160 --burn-in 40"

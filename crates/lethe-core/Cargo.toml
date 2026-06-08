@@ -1,0 +1,17 @@
+[package]
+name = "lethe-core"
+description = "Core domain abstractions for Lethe experiments"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+rand_chacha.workspace = true
+
+[lints]
+workspace = true

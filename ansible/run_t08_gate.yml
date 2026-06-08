@@ -1,0 +1,157 @@
+---
+# Run the T08 generalisation gate sweep on all fhn_runners.
+#
+# Usage:
+#   ansible-playbook -i ansible/inventory.ini ansible/run_t08_gate.yml
+
+- name: Run T08 generalisation gate
+  hosts: fhn_runners
+  gather_facts: true
+
+  pre_tasks:
+    - name: Ensure gate command is configured
+      ansible.builtin.fail:
+        msg: "Set gate_command in ansible/group_vars/all.yml before running this playbook."
+      when: gate_command == "__SET_ME__"
+
+    - name: Install system dependencies (Debian/Ubuntu)
+      become: true
+      ansible.builtin.apt:
+        name:
+          - build-essential
+          - pkg-config
+          - tmux
+          - curl
+          - git
+        state: present
+        update_cache: true
+      when: ansible_facts['os_family'] == 'Debian'
+
+    - name: Install system dependencies (Arch/Manjaro)
+      become: true
+      community.general.pacman:
+        name:
+          - base-devel
+          - pkg-config
+          - tmux
+          - curl
+          - git
+        state: present
+        update_cache: true
+      when: ansible_facts['os_family'] == 'Archlinux'
+
+  tasks:
+    - name: Read GitHub token from file (controller)
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/.github.token"
+      register: github_token_b64
+      delegate_to: localhost
+      ignore_errors: true
+
+    - name: Decode GitHub token
+      ansible.builtin.set_fact:
+        github_token_value: "{{ github_token_b64.content | default('') | b64decode | trim }}"
+      no_log: true
+
+    - name: Build authenticated repo URL
+      ansible.builtin.set_fact:
+        repo_url_auth: >-
+          {{
+            repo_url | regex_replace(
+              '^https://',
+              'https://' ~ github_token_value ~ '@'
+            )
+            if (
+              (hostvars['localhost'].github_token_value | default('') | length) > 0
+              and (repo_url is match('^https://'))
+            )
+            else repo_url
+          }}
+      no_log: true
+
+    - name: Ensure checkout parent directory exists
+      ansible.builtin.file:
+        path: "{{ repo_dest | dirname }}"
+        state: directory
+        mode: "0755"
+
+    - name: Ensure repository checkout exists and is up to date
+      ansible.builtin.git:
+        repo: "{{ repo_url_auth }}"
+        dest: "{{ repo_dest }}"
+        version: "{{ repo_version }}"
+        update: true
+        force: true
+        depth: 1
+        single_branch: true
+      environment:
+        GIT_TERMINAL_PROMPT: "0"
+        GIT_ASKPASS: "/bin/true"
+      async: 900
+      poll: 10
+      no_log: true
+      register: git_checkout_result
+      failed_when: false
+
+    - name: Continue when repo has local modifications
+      ansible.builtin.debug:
+        msg: "Skipping git update due to local modifications; using existing checkout"
+      when: >-
+        git_checkout_result is failed and
+        ('Local modifications exist in the destination' in
+         (git_checkout_result.msg | default('')))
+
+    - name: Fail on unexpected git errors
+      ansible.builtin.fail:
+        msg: "Git checkout failed unexpectedly for {{ repo_dest }}"
+      when: >-
+        git_checkout_result is failed and
+        ('Local modifications exist in the destination' not in
+         (git_checkout_result.msg | default('')))
+
+    - name: Ensure Rust toolchain is installed and up to date
+      ansible.builtin.shell: |
+        set -eu
+        if [ ! -x "$HOME/.cargo/bin/rustc" ]; then
+          curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal
+        fi
+        "$HOME/.cargo/bin/rustup" toolchain install stable
+        "$HOME/.cargo/bin/rustup" default stable
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Build release binaries
+      ansible.builtin.command: "$HOME/.cargo/bin/cargo build --workspace --release"
+      args:
+        chdir: "{{ repo_dest }}"
+      environment:
+        PATH: "$HOME/.cargo/bin:{{ ansible_facts['env']['PATH'] }}"
+
+    - name: Ensure results directory exists
+      ansible.builtin.file:
+        path: "{{ repo_dest }}/results"
+        state: directory
+        mode: "0755"
+
+    - name: Launch T08 gate run in tmux
+      ansible.builtin.shell: |
+        set -eu
+        tmux kill-session -t "{{ run_session }}" 2>/dev/null || true
+
+        tmux new-session -d -s "{{ run_session }}" \
+          "cd {{ repo_dest }} && \
+           {{ gate_command }} \
+           > results/{{ run_name }}.log 2>&1; \
+           echo \"exit $?\" >> results/{{ run_name }}.log"
+
+        echo "started"
+      args:
+        chdir: "{{ repo_dest }}"
+        executable: /bin/bash
+      register: launch_status
+      changed_when: "'started' in launch_status.stdout"
+
+    - name: Report launch status
+      ansible.builtin.debug:
+        msg: "{{ run_session }} on {{ inventory_hostname }}: {{ launch_status.stdout | trim }}"
