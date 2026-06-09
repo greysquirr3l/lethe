@@ -1,4 +1,4 @@
-use lethe_core::{State, Substrate, SubstrateParams};
+use lethe_core::{DofKind, NaturalDof, State, Substrate, SubstrateParams};
 use rand_chacha::ChaCha8Rng;
 use rand_core::RngCore;
 
@@ -303,6 +303,12 @@ fn usize_to_f64(value: usize) -> f64 {
     f64::from(narrowed)
 }
 
+impl NaturalDof for ConductanceSubstrate {
+    fn natural_dof(&self) -> DofKind {
+        DofKind::Retention
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -398,5 +404,15 @@ mod tests {
             71, 225, 122, 132, 63, 72, 107, 1, 0, 0, 0, 0, 0,
         ];
         assert_eq!(bytes, expected);
+    }
+
+    #[test]
+    fn conductance_natural_dof_is_retention() {
+        use lethe_core::DofKind;
+        use lethe_core::NaturalDof;
+
+        let substrate = ConductanceSubstrate::new(ConductanceConfig::default());
+
+        assert_eq!(substrate.natural_dof(), DofKind::Retention);
     }
 }

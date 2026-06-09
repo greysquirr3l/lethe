@@ -1,4 +1,4 @@
-use lethe_core::{State, Substrate, SubstrateParams};
+use lethe_core::{DofKind, NaturalDof, State, Substrate, SubstrateParams};
 use rand_chacha::ChaCha8Rng;
 use rand_core::RngCore;
 
@@ -264,6 +264,12 @@ fn standard_normal(rng: &mut ChaCha8Rng) -> f64 {
     radius * angle.cos()
 }
 
+impl NaturalDof for FhnSubstrate {
+    fn natural_dof(&self) -> DofKind {
+        DofKind::Coupling
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -312,5 +318,15 @@ mod tests {
             219, 215, 129, 195, 63, 0, 0, 0, 0, 0, 0, 0, 0,
         ];
         assert_eq!(bytes, expected);
+    }
+
+    #[test]
+    fn fhn_natural_dof_is_coupling() {
+        use lethe_core::DofKind;
+        use lethe_core::NaturalDof;
+
+        let substrate = FhnSubstrate::new(FhnConfig::default());
+
+        assert_eq!(substrate.natural_dof(), DofKind::Coupling);
     }
 }

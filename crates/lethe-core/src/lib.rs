@@ -4,9 +4,9 @@ pub mod domain;
 pub mod ports;
 
 pub use domain::{
-    Observer, ObserverConfig, ObserverMetrics, PlasticDOF, State, StateTrace, TraceFrame,
+    DofKind, Observer, ObserverConfig, ObserverMetrics, PlasticDOF, State, StateTrace, TraceFrame,
 };
-pub use ports::{Substrate, SubstrateParams};
+pub use ports::{NaturalDof, Substrate, SubstrateParams};
 
 #[cfg(test)]
 mod tests {

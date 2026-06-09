@@ -1,4 +1,4 @@
-use lethe_core::{State, Substrate, SubstrateParams};
+use lethe_core::{DofKind, NaturalDof, State, Substrate, SubstrateParams};
 use rand_chacha::ChaCha8Rng;
 use rand_core::RngCore;
 
@@ -315,6 +315,12 @@ fn usize_to_f64(value: usize) -> f64 {
     f64::from(narrowed)
 }
 
+impl NaturalDof for LatticeSubstrate {
+    fn natural_dof(&self) -> DofKind {
+        DofKind::Retention
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -395,5 +401,16 @@ mod tests {
             63,
         ];
         assert_eq!(bytes, expected);
+    }
+
+    #[test]
+    fn lattice_natural_dof_is_retention() {
+        use lethe_core::DofKind;
+        use lethe_core::NaturalDof;
+
+        let config = base_config(LatticePlasticity::Fixed);
+        let substrate = LatticeSubstrate::new(config, 7);
+
+        assert_eq!(substrate.natural_dof(), DofKind::Retention);
     }
 }
