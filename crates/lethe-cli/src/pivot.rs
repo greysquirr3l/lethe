@@ -650,7 +650,7 @@ fn write_evidence_csv(path: &PathBuf, rows: &[EvidenceRow]) -> Result<()> {
     for row in rows {
         writeln!(
             &mut out,
-            "{},{},{:.6},{:.6},{:.8},{:.8},{:.8},{:.8},{:.8}",
+            "{},{},{},{:.6},{:.8},{:.8},{:.8},{:.8},{:.8}",
             row.substrate.as_str(),
             row.substrate.dof_kind().as_str(),
             row.substrate.goldilocks_knob(),
@@ -806,7 +806,10 @@ pub fn run_pivot_command(args: &[OsString]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Classification, PivotArgs, SubstrateKind, Verdict, parse_pivot_args, run_pivot};
+    use super::{
+        Classification, PivotArgs, SubstrateKind, Verdict, parse_pivot_args, run_pivot,
+        write_evidence_csv,
+    };
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -927,5 +930,34 @@ mod tests {
         assert_eq!(Verdict::Go.as_str(), "GO");
         assert_eq!(Verdict::Pivot.as_str(), "PIVOT");
         assert_eq!(Verdict::NoGo.as_str(), "NO-GO");
+    }
+
+    #[test]
+    fn evidence_csv_emits_full_knob_name() {
+        // Regression: the CSV writer was passing `goldilocks_knob()`
+        // through `{:.6}`, which silently truncates `&str` to its first
+        // 6 chars (e.g. `eta_coupling` -> `eta_co`). Pin the full
+        // identifier so a future format-string edit cannot silently
+        // rename columns in the evidence file.
+        let outcome = run_pivot(8, 4);
+        let dir = std::env::temp_dir().join(format!("lethe-pivot-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).ok();
+        let csv_path = dir.join("evidence.csv");
+        write_evidence_csv(&csv_path, &outcome.rows).ok();
+        let body = std::fs::read_to_string(&csv_path).ok();
+        let body = body.unwrap_or_default();
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(
+            body.contains("eta_coupling"),
+            "expected `eta_coupling` (full identifier) in evidence csv, got:\n{body}",
+        );
+        assert!(
+            body.contains("eta_omega"),
+            "expected `eta_omega` (full identifier) in evidence csv, got:\n{body}",
+        );
+        assert!(
+            body.contains("eta_lambda"),
+            "expected `eta_lambda` (full identifier) in evidence csv, got:\n{body}",
+        );
     }
 }
