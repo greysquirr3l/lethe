@@ -22,6 +22,20 @@ pub enum DofKind {
     Frequency,
 }
 
+impl DofKind {
+    /// Stable lowercase identifier used in evidence and decision artefacts.
+    /// Pin this in tests so a rename cannot silently change downstream
+    /// decision files.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Retention => "retention",
+            Self::Coupling => "coupling",
+            Self::Frequency => "frequency",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::DofKind;
@@ -36,5 +50,14 @@ mod tests {
         assert_ne!(DofKind::Retention, DofKind::Coupling);
         assert_ne!(DofKind::Retention, DofKind::Frequency);
         assert_ne!(DofKind::Coupling, DofKind::Frequency);
+    }
+
+    #[test]
+    fn dof_kind_as_str_is_stable() {
+        // Pin the lowercase identifiers used in evidence and decision files.
+        // A rename here would silently invalidate downstream artefacts.
+        assert_eq!(DofKind::Retention.as_str(), "retention");
+        assert_eq!(DofKind::Coupling.as_str(), "coupling");
+        assert_eq!(DofKind::Frequency.as_str(), "frequency");
     }
 }

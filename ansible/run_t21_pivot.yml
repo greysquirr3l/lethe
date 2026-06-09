@@ -1,0 +1,150 @@
+---
+# Run the T21 per-substrate live-DOF characterisation pivot on all fhn_runners.
+#
+# Mirrors `run_t08_gate.yml`. The only difference is the gate_command
+# (pivot subcommand) and the artifact directory layout (results/t21_pivot/).
+#
+# Usage:
+#   ansible-playbook -i ansible/inventory.ini ansible/run_t21_pivot.yml
+
+- name: Run T21 per-substrate live-DOF pivot
+  hosts: fhn_runners
+  gather_facts: true
+
+  pre_tasks:
+    - name: Ensure gate command is configured
+      ansible.builtin.fail:
+        msg: "Set gate_command in ansible/group_vars/all.yml before running this playbook."
+      when: gate_command == "__SET_ME__"
+
+    - name: Install system dependencies (Debian/Ubuntu)
+      become: true
+      ansible.builtin.apt:
+        name:
+          - build-essential
+          - pkg-config
+          - tmux
+          - curl
+          - git
+        state: present
+        update_cache: true
+      when: ansible_facts['os_family'] == 'Debian'
+
+    - name: Install system dependencies (Arch/Manjaro)
+      become: true
+      community.general.pacman:
+        name:
+          - base-devel
+          - pkg-config
+          - tmux
+          - curl
+          - git
+        state: present
+        update_cache: true
+      when: ansible_facts['os_family'] == 'Archlinux'
+
+  tasks:
+    - name: Read GitHub token from file (controller)
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/.github.token"
+      register: github_token_b64
+      delegate_to: localhost
+      ignore_errors: true
+
+    - name: Decode GitHub token
+      ansible.builtin.set_fact:
+        github_token_value: "{{ github_token_b64.content | default('') | b64decode | trim }}"
+      no_log: true
+
+    - name: Build authenticated repo URL
+      ansible.builtin.set_fact:
+        repo_url_auth: >-
+          {{
+            repo_url | regex_replace(
+              '^https://',
+              'https://x-access-token:' ~ github_token_value ~ '@'
+            )
+            if (
+              (hostvars['localhost'].github_token_value | default('') | length) > 0
+              and (repo_url is match('^https://'))
+            )
+            else repo_url
+          }}
+      no_log: true
+
+    - name: Ensure checkout parent directory exists
+      ansible.builtin.file:
+        path: "{{ repo_dest | dirname }}"
+        state: directory
+        mode: "0755"
+
+    - name: Ensure repository checkout exists and is up to date
+      ansible.builtin.git:
+        repo: "{{ repo_url_auth }}"
+        dest: "{{ repo_dest }}"
+        version: "{{ repo_version }}"
+        update: true
+        force: true
+        depth: 1
+        single_branch: true
+      environment:
+        GIT_TERMINAL_PROMPT: "0"
+        GIT_ASKPASS: "/bin/true"
+      no_log: true
+
+    - name: Verify checkout has Cargo.toml
+      ansible.builtin.stat:
+        path: "{{ repo_dest }}/Cargo.toml"
+      register: cargo_toml_stat
+
+    - name: Fail when checkout is incomplete
+      ansible.builtin.fail:
+        msg: "Repository checkout at {{ repo_dest }} is missing Cargo.toml"
+      when: not cargo_toml_stat.stat.exists
+
+    - name: Ensure Rust toolchain is installed and up to date
+      ansible.builtin.shell: |
+        set -eu
+        if [ ! -x "$HOME/.cargo/bin/rustc" ]; then
+          curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal
+        fi
+        "$HOME/.cargo/bin/rustup" toolchain install stable
+        "$HOME/.cargo/bin/rustup" default stable
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Build release binaries
+      ansible.builtin.command: "$HOME/.cargo/bin/cargo build --workspace --release"
+      args:
+        chdir: "{{ repo_dest }}"
+      environment:
+        PATH: "$HOME/.cargo/bin:{{ ansible_facts['env']['PATH'] }}"
+
+    - name: Ensure results and pivot directories exist
+      ansible.builtin.file:
+        path: "{{ repo_dest }}/results/{{ run_name }}"
+        state: directory
+        mode: "0755"
+
+    - name: Launch T21 pivot run in tmux
+      ansible.builtin.shell: |
+        set -eu
+        tmux kill-session -t "{{ run_session }}" 2>/dev/null || true
+
+        tmux new-session -d -s "{{ run_session }}" \
+          "cd {{ repo_dest }} && \
+           {{ gate_command }} \
+           > results/{{ run_name }}/{{ run_name }}.log 2>&1; \
+           echo \"exit $?\" >> results/{{ run_name }}/{{ run_name }}.log"
+
+        echo "started"
+      args:
+        chdir: "{{ repo_dest }}"
+        executable: /bin/bash
+      register: launch_status
+      changed_when: "'started' in launch_status.stdout"
+
+    - name: Report launch status
+      ansible.builtin.debug:
+        msg: "{{ run_session }} on {{ inventory_hostname }}: {{ launch_status.stdout | trim }}"

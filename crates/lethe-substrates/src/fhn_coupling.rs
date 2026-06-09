@@ -159,15 +159,11 @@ impl FhnCouplingSubstrate {
         let max = self.config.coupling_max;
         let n = self.config.cell_count();
         for idx in 0..n {
-            let activity = self.nodes.get(idx).map(|node| node.v).unwrap_or(0.0);
+            let activity = self.nodes.get(idx).map_or(0.0, |node| node.v);
             let neighbors = self.neighbors(idx);
             let mut neighbor_mean = 0.0;
             for neighbor in neighbors {
-                neighbor_mean += self
-                    .nodes
-                    .get(neighbor)
-                    .map(|node| node.v)
-                    .unwrap_or(activity);
+                neighbor_mean += self.nodes.get(neighbor).map_or(activity, |node| node.v);
             }
             neighbor_mean /= 4.0;
             // Hebbian: strengthen the local coupling weight when the

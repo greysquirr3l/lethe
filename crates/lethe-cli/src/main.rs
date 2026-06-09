@@ -14,6 +14,8 @@ use lethe_substrates::{
 use rand_chacha::ChaCha8Rng;
 use rand_core::SeedableRng;
 
+mod pivot;
+
 const DEFAULT_GATE_SAMPLES: usize = 160;
 const DEFAULT_GATE_BURN_IN: usize = 40;
 const LIVE_LIFT_THRESHOLD: f64 = 0.01;
@@ -676,9 +678,13 @@ fn run() -> Result<()> {
             let remaining: Vec<OsString> = args.collect();
             run_gate_command(&remaining)
         }
+        Some(command) if command == "pivot" => {
+            let remaining: Vec<OsString> = args.collect();
+            pivot::run_pivot_command(&remaining)
+        }
         Some(command) => bail!("unsupported command: {command}"),
         None => bail!(
-            "usage: lethe-cli repro --seed <u64> --steps <usize> --output <path> | gate [--output-dir <path>] [--samples <n>] [--burn-in <n>]"
+            "usage: lethe-cli repro --seed <u64> --steps <usize> --output <path> | gate [--output-dir <path>] [--samples <n>] [--burn-in <n>] | pivot [--output-dir <path>] [--samples <n>] [--burn-in <n>]"
         ),
     }
 }
