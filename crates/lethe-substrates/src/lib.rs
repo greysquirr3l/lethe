@@ -4,6 +4,7 @@ mod conductance;
 mod conductance_retention;
 mod fhn;
 mod fhn_coupling;
+mod fhn_coupling_hebbian;
 mod lattice;
 mod oscillator;
 mod oscillator_frequency;
@@ -20,6 +21,10 @@ pub use fhn::{
     FhnSubstrate, fhn_regression_signature_bytes,
 };
 pub use fhn_coupling::{FHN_COUPLING_SEED_BASE, FhnCouplingConfig, FhnCouplingSubstrate};
+pub use fhn_coupling_hebbian::{
+    FHN_COUPLING_HEBBIAN_SEED_BASE, FhnCouplingHebbianConfig, FhnCouplingHebbianSubstrate,
+    fhn_hebbian_regression_signature_bytes,
+};
 pub use lattice::{
     LatticeConfig, LatticePlasticity, LatticeRegression, LatticeSubstrate, PAPER_REGRESSION,
     regression_signature_bytes,

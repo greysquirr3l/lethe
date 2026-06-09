@@ -29,7 +29,8 @@ use lethe_core::{DofKind, Observer, ObserverConfig, ObserverMetrics, StateTrace,
 use lethe_substrates::{
     CONDUCTANCE_RETENTION_SEED_BASE, CONDUCTANCE_SEED_BASE, ConductanceConfig,
     ConductancePlasticity, ConductanceRetentionConfig, ConductanceRetentionSubstrate,
-    ConductanceSubstrate, FHN_COUPLING_SEED_BASE, FHN_SEED_BASE, FhnConfig, FhnCouplingConfig,
+    ConductanceSubstrate, FHN_COUPLING_HEBBIAN_SEED_BASE, FHN_COUPLING_SEED_BASE, FHN_SEED_BASE,
+    FhnConfig, FhnCouplingConfig, FhnCouplingHebbianConfig, FhnCouplingHebbianSubstrate,
     FhnCouplingSubstrate, FhnSubstrate, LatticeConfig, LatticePlasticity, LatticeSubstrate,
     OSCILLATOR_FREQUENCY_SEED_BASE, OSCILLATOR_SEED_BASE, OscillatorConfig,
     OscillatorFrequencyConfig, OscillatorFrequencySubstrate, OscillatorPlasticity,
@@ -49,6 +50,11 @@ const DEAD_NULL_THRESHOLD: f64 = 0.01;
 // as the rightmost grid point so the T21 evidence explicitly brackets the
 // T08 failure mode.
 const FHN_COUPLING_GRID: &[f64] = &[0.001, 0.005, 0.01, 0.05];
+// T22 follow-on: extended low end vs T21 because the per-edge Hebbian
+// rule accumulates slower than a uniform gain knob. The rightmost
+// `0.03` point is below T21's `0.05` because the new mechanism has a
+// smaller natural step size.
+const FHN_COUPLING_HEBBIAN_GRID: &[f64] = &[0.0001, 0.0003, 0.001, 0.003, 0.01, 0.03];
 const OSCILLATOR_OMEGA_GRID: &[f64] = &[0.001, 0.005, 0.01, 0.05];
 const CONDUCTANCE_LAMBDA_GRID: &[f64] = &[0.001, 0.003, 0.005, 0.01, 0.03];
 const LATTICE_ALPHA_GRID: &[f64] = &[0.85, 0.90, 0.95, 0.99];
@@ -75,6 +81,11 @@ impl Verdict {
 pub enum SubstrateKind {
     Lattice,
     Fhn,
+    /// T22 follow-on to T21: FHN re-tested with a T08-faithful
+    /// asymmetric Hebbian per-edge coupling rule. Sits *alongside*
+    /// `Fhn` (the T21 wrong-knob baseline) rather than replacing it;
+    /// see `tasks/T22-fhn-asymmetric-coupling-hebbian.md`.
+    FhnHebbian,
     Oscillator,
     Conductance,
 }
@@ -85,6 +96,7 @@ impl SubstrateKind {
         match self {
             Self::Lattice => "lattice",
             Self::Fhn => "fhn",
+            Self::FhnHebbian => "fhn-hebbian",
             Self::Oscillator => "oscillator",
             Self::Conductance => "conductance",
         }
@@ -98,7 +110,7 @@ impl SubstrateKind {
     #[must_use]
     pub const fn dof_kind(self) -> DofKind {
         match self {
-            Self::Fhn => DofKind::Coupling,
+            Self::Fhn | Self::FhnHebbian => DofKind::Coupling,
             Self::Oscillator => DofKind::Frequency,
             Self::Lattice | Self::Conductance => DofKind::Retention,
         }
@@ -108,7 +120,7 @@ impl SubstrateKind {
     pub const fn goldilocks_knob(self) -> &'static str {
         match self {
             Self::Lattice => "alpha",
-            Self::Fhn => "eta_coupling",
+            Self::Fhn | Self::FhnHebbian => "eta_coupling",
             Self::Oscillator => "eta_omega",
             Self::Conductance => "eta_lambda",
         }
@@ -409,6 +421,92 @@ fn evaluate_fhn_coupling(burn_in: usize, samples: usize) -> Vec<EvidenceRow> {
 }
 
 // ---------------------------------------------------------------------
+// T22 follow-on: FHN re-tested with the T08-faithful asymmetric Hebbian
+// per-edge coupling rule. The fixed/dead baselines are *identical* to
+// the T21 FHN row (`FhnSubstrate` with default and `lambda=0.99`),
+// which makes the live Δ directly comparable to the T21 baseline and
+// is what the spec's C1 "T21 replay" assertion depends on. See
+// `tasks/T22-fhn-asymmetric-coupling-hebbian.md`.
+// ---------------------------------------------------------------------
+
+fn evaluate_fhn_coupling_hebbian_at(
+    eta_coupling: f64,
+    burn_in: usize,
+    samples: usize,
+) -> EvidenceRow {
+    // Fixed: FhnSubstrate, no plasticity perturbation beyond defaults.
+    let fixed_config = FhnConfig {
+        size: 8,
+        epsilon: 0.08,
+        coupling: 0.2,
+        i_ext: 0.5,
+        i_ext_noise: 0.1,
+        lambda: 0.95,
+        seed: FHN_SEED_BASE,
+    };
+    let fixed_score = metric_score(&collect_metrics(
+        &mut FhnSubstrate::new(fixed_config),
+        FHN_SEED_BASE + 100,
+        burn_in,
+        samples,
+    ));
+
+    // Dead: FhnSubstrate with the *other* DOF (lambda) statically
+    // perturbed, identical to the T21 FHN row.
+    let dead_config = FhnConfig {
+        lambda: 0.99,
+        ..fixed_config
+    };
+    let dead_score = metric_score(&collect_metrics(
+        &mut FhnSubstrate::new(dead_config),
+        FHN_SEED_BASE + 101,
+        burn_in,
+        samples,
+    ));
+
+    // Live-natural: FhnCouplingHebbianSubstrate sweeping the natural-DOF
+    // knob. The `+200` offset on the RNG seed is the project convention
+    // for the live-DOF mode (matches the FHN row and the other
+    // substrates in this file).
+    let live_config = FhnCouplingHebbianConfig {
+        size: 8,
+        epsilon: 0.08,
+        i_ext: 0.5,
+        i_ext_noise: 0.1,
+        lambda: 0.95,
+        eta_coupling,
+        tau_e: 0.5,
+        beta_oja: 0.01,
+        w_max: 1.0,
+        w_init: 0.2,
+        seed: FHN_COUPLING_HEBBIAN_SEED_BASE,
+    };
+    let live_natural_score = metric_score(&collect_metrics(
+        &mut FhnCouplingHebbianSubstrate::new(live_config),
+        FHN_COUPLING_HEBBIAN_SEED_BASE + 200,
+        burn_in,
+        samples,
+    ));
+
+    EvidenceRow {
+        substrate: SubstrateKind::FhnHebbian,
+        knob: eta_coupling,
+        fixed_score,
+        dead_score,
+        live_natural_score,
+        dead_delta: dead_score - fixed_score,
+        live_natural_delta: live_natural_score - fixed_score,
+    }
+}
+
+fn evaluate_fhn_coupling_hebbian(burn_in: usize, samples: usize) -> Vec<EvidenceRow> {
+    FHN_COUPLING_HEBBIAN_GRID
+        .iter()
+        .map(|eta| evaluate_fhn_coupling_hebbian_at(*eta, burn_in, samples))
+        .collect()
+}
+
+// ---------------------------------------------------------------------
 // Oscillator intrinsic-frequency live-DOF evaluation. T21 hypothesis:
 // the natural DOF on the Kuramoto-style oscillator is the per-cell
 // intrinsic omega, not the phase-memory retention band. The "dead" mode
@@ -598,12 +696,14 @@ pub fn run_pivot(samples: usize, burn_in: usize) -> PivotOutcome {
     let mut rows = Vec::new();
     rows.extend(evaluate_lattice(burn_in, samples));
     rows.extend(evaluate_fhn_coupling(burn_in, samples));
+    rows.extend(evaluate_fhn_coupling_hebbian(burn_in, samples));
     rows.extend(evaluate_oscillator_frequency(burn_in, samples));
     rows.extend(evaluate_conductance_retention(burn_in, samples));
 
     let kinds = [
         SubstrateKind::Lattice,
         SubstrateKind::Fhn,
+        SubstrateKind::FhnHebbian,
         SubstrateKind::Oscillator,
         SubstrateKind::Conductance,
     ];
@@ -869,6 +969,13 @@ mod tests {
     fn substrate_kind_natural_dof_matches_t21_taxonomy() {
         assert_eq!(SubstrateKind::Lattice.dof_kind(), super::DofKind::Retention);
         assert_eq!(SubstrateKind::Fhn.dof_kind(), super::DofKind::Coupling);
+        // T22: FhnHebbian's natural DOF is Coupling (same DOF as Fhn,
+        // different mechanism — asymmetric Hebbian per-edge, not a
+        // uniform gain knob).
+        assert_eq!(
+            SubstrateKind::FhnHebbian.dof_kind(),
+            super::DofKind::Coupling,
+        );
         assert_eq!(
             SubstrateKind::Oscillator.dof_kind(),
             super::DofKind::Frequency
@@ -902,16 +1009,19 @@ mod tests {
     #[test]
     fn run_pivot_smoke_emits_one_summary_per_substrate() {
         // Cheap smoke: confirm the wiring runs end-to-end and produces
-        // the expected 4-substrate summary. Per-substrate lift/null
-        // assertions are not pinned here because the lattice control's
-        // dead-delta sign depends on sample/burn-in ratio (T08 evidence:
-        // dead_delta = -0.495 at 160/40). Real coverage is the actual
-        // pivot run + T21 task-exit assertion.
+        // the expected 5-substrate summary (Lattice + Fhn +
+        // FhnHebbian [T22] + Oscillator + Conductance). Per-substrate
+        // lift/null assertions are not pinned here because the lattice
+        // control's dead-delta sign depends on sample/burn-in ratio
+        // (T08 evidence: dead_delta = -0.495 at 160/40). Real
+        // coverage is the actual pivot run + T21/T22 task-exit
+        // assertions.
         let outcome = run_pivot(8, 4);
-        assert_eq!(outcome.summaries.len(), 4);
+        assert_eq!(outcome.summaries.len(), 5);
         for kind in [
             SubstrateKind::Lattice,
             SubstrateKind::Fhn,
+            SubstrateKind::FhnHebbian,
             SubstrateKind::Oscillator,
             SubstrateKind::Conductance,
         ] {
