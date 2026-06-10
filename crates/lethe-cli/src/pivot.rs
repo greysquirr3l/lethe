@@ -29,12 +29,13 @@ use lethe_core::{DofKind, Observer, ObserverConfig, ObserverMetrics, StateTrace,
 use lethe_substrates::{
     CONDUCTANCE_RETENTION_SEED_BASE, CONDUCTANCE_SEED_BASE, ConductanceConfig,
     ConductancePlasticity, ConductanceRetentionConfig, ConductanceRetentionSubstrate,
-    ConductanceSubstrate, FHN_COUPLING_HEBBIAN_SEED_BASE, FHN_COUPLING_SEED_BASE, FHN_SEED_BASE,
-    FhnConfig, FhnCouplingConfig, FhnCouplingHebbianConfig, FhnCouplingHebbianSubstrate,
-    FhnCouplingSubstrate, FhnSubstrate, LatticeConfig, LatticePlasticity, LatticeSubstrate,
+    ConductanceSubstrate, ETA_OMEGA_SWEEP, FHN_COUPLING_HEBBIAN_SEED_BASE, FHN_COUPLING_SEED_BASE,
+    FHN_SEED_BASE, FhnConfig, FhnCouplingConfig, FhnCouplingHebbianConfig,
+    FhnCouplingHebbianSubstrate, FhnCouplingSubstrate, FhnSubstrate, LatticeConfig,
+    LatticePlasticity, LatticeSubstrate, OSCILLATOR_COUPLING_HEBBIAN_SEED_BASE,
     OSCILLATOR_FREQUENCY_SEED_BASE, OSCILLATOR_SEED_BASE, OscillatorConfig,
-    OscillatorFrequencyConfig, OscillatorFrequencySubstrate, OscillatorPlasticity,
-    OscillatorSubstrate,
+    OscillatorCouplingHebbianConfig, OscillatorCouplingHebbianSubstrate, OscillatorFrequencyConfig,
+    OscillatorFrequencySubstrate, OscillatorPlasticity, OscillatorSubstrate,
 };
 use rand_chacha::ChaCha8Rng;
 use rand_core::SeedableRng;
@@ -55,7 +56,21 @@ const FHN_COUPLING_GRID: &[f64] = &[0.001, 0.005, 0.01, 0.05];
 // `0.03` point is below T21's `0.05` because the new mechanism has a
 // smaller natural step size.
 const FHN_COUPLING_HEBBIAN_GRID: &[f64] = &[0.0001, 0.0003, 0.001, 0.003, 0.01, 0.03];
-const OSCILLATOR_OMEGA_GRID: &[f64] = &[0.001, 0.005, 0.01, 0.05];
+// T23 Prong A re-scope: extended low end vs T21 (which was
+// `{0.001, 0.005, 0.01, 0.05}`). The T21 sweep was too aggressive for
+// Kuramoto intrinsic-frequency drift; the micro-rates are bracketed
+// to see whether the original "monotonically destructive" T21 curve
+// is a tuning artifact of the T21 knob or a true substrate
+// statement. The grid is sourced from the substrate crate
+// (`oscillator_frequency::ETA_OMEGA_SWEEP`) so the fixture is the
+// single source of truth and any future T23-A2 evidence
+// re-computation uses the same set.
+const OSCILLATOR_OMEGA_GRID: &[f64] = ETA_OMEGA_SWEEP;
+// T23 Prong B: new row — the natural DOF might be the coupling band,
+// not the frequency band. Mirrors the T22 FHN-coupling-hebbian grid
+// (`{0.0001, 0.0003, 0.001, 0.003, 0.01}`) because the mechanism
+// (per-edge asymmetric Hebbian + Oja) is structurally identical.
+const OSCILLATOR_COUPLING_HEBBIAN_GRID: &[f64] = &[0.0001, 0.0003, 0.001, 0.003, 0.01];
 const CONDUCTANCE_LAMBDA_GRID: &[f64] = &[0.001, 0.003, 0.005, 0.01, 0.03];
 const LATTICE_ALPHA_GRID: &[f64] = &[0.85, 0.90, 0.95, 0.99];
 
@@ -87,6 +102,12 @@ pub enum SubstrateKind {
     /// see `tasks/T22-fhn-asymmetric-coupling-hebbian.md`.
     FhnHebbian,
     Oscillator,
+    /// T23 Prong B follow-on to T21: oscillator re-tested with a
+    /// T08-faithful asymmetric Hebbian per-edge coupling rule on the
+    /// Kuramoto coupling band. Sits *alongside* `Oscillator` (the T21
+    /// wrong-knob frequency-band baseline) rather than replacing it;
+    /// see `tasks/T23-oscillator-dof-rescope.md`.
+    OscillatorCouplingHebbian,
     Conductance,
 }
 
@@ -98,6 +119,7 @@ impl SubstrateKind {
             Self::Fhn => "fhn",
             Self::FhnHebbian => "fhn-hebbian",
             Self::Oscillator => "oscillator",
+            Self::OscillatorCouplingHebbian => "oscillator-coupling-hebbian",
             Self::Conductance => "conductance",
         }
     }
@@ -110,7 +132,7 @@ impl SubstrateKind {
     #[must_use]
     pub const fn dof_kind(self) -> DofKind {
         match self {
-            Self::Fhn | Self::FhnHebbian => DofKind::Coupling,
+            Self::Fhn | Self::FhnHebbian | Self::OscillatorCouplingHebbian => DofKind::Coupling,
             Self::Oscillator => DofKind::Frequency,
             Self::Lattice | Self::Conductance => DofKind::Retention,
         }
@@ -120,7 +142,7 @@ impl SubstrateKind {
     pub const fn goldilocks_knob(self) -> &'static str {
         match self {
             Self::Lattice => "alpha",
-            Self::Fhn | Self::FhnHebbian => "eta_coupling",
+            Self::Fhn | Self::FhnHebbian | Self::OscillatorCouplingHebbian => "eta_coupling",
             Self::Oscillator => "eta_omega",
             Self::Conductance => "eta_lambda",
         }
@@ -588,6 +610,103 @@ fn evaluate_oscillator_frequency(burn_in: usize, samples: usize) -> Vec<Evidence
 }
 
 // ---------------------------------------------------------------------
+// T23 Prong B follow-on: oscillator re-tested with the T08-faithful
+// asymmetric Hebbian per-edge coupling rule on the Kuramoto coupling
+// band. The fixed/dead baselines are *identical* to the T21 oscillator
+// row (`OscillatorSubstrate` with default and `OscillatorPlasticity::Hebbian`),
+// which makes the live Δ directly comparable to the T21 baseline.
+// The natural DOF is Coupling (T23 hypothesis: the Kuramoto live DOF
+// is the coupling band, not the frequency band). See
+// `tasks/T23-oscillator-dof-rescope.md`.
+// ---------------------------------------------------------------------
+
+fn evaluate_oscillator_coupling_hebbian_at(
+    eta_coupling: f64,
+    burn_in: usize,
+    samples: usize,
+) -> EvidenceRow {
+    // Fixed: OscillatorSubstrate with no plasticity perturbation.
+    let base = OscillatorConfig {
+        size: 8,
+        coupling: 2.4,
+        base_frequency: 1.0,
+        frequency_spread: 0.35,
+        noise_scale: 0.05,
+        phase_memory_lambda: 0.93,
+        dt: 0.05,
+        plasticity: OscillatorPlasticity::Fixed,
+        seed: OSCILLATOR_SEED_BASE,
+    };
+    let fixed_score = metric_score(&collect_metrics(
+        &mut OscillatorSubstrate::new(base),
+        OSCILLATOR_SEED_BASE + 100,
+        burn_in,
+        samples,
+    ));
+
+    // Dead: OscillatorSubstrate with the *other* DOF (coupling-weight
+    // Hebbian) statically perturbed, identical to the T21 oscillator
+    // row.
+    let dead_config = OscillatorConfig {
+        plasticity: OscillatorPlasticity::Hebbian {
+            eta: 0.02,
+            lambda_w: 0.01,
+            w_max: 2.0,
+        },
+        ..base
+    };
+    let dead_score = metric_score(&collect_metrics(
+        &mut OscillatorSubstrate::new(dead_config),
+        OSCILLATOR_SEED_BASE + 101,
+        burn_in,
+        samples,
+    ));
+
+    // Live-natural: OscillatorCouplingHebbianSubstrate sweeping the
+    // natural-DOF knob. The `+200` offset on the RNG seed is the
+    // project convention for the live-DOF mode (matches the other
+    // substrates in this file).
+    let live_config = OscillatorCouplingHebbianConfig {
+        size: 8,
+        base_coupling: 2.4,
+        base_omega: 1.0,
+        omega_spread: 0.35,
+        noise_scale: 0.05,
+        phase_memory_lambda: 0.93,
+        dt: 0.05,
+        eta_coupling,
+        tau_e: 0.5,
+        beta_oja: 0.01,
+        w_max: 1.0,
+        w_init: 0.2,
+        seed: OSCILLATOR_COUPLING_HEBBIAN_SEED_BASE,
+    };
+    let live_natural_score = metric_score(&collect_metrics(
+        &mut OscillatorCouplingHebbianSubstrate::new(live_config),
+        OSCILLATOR_COUPLING_HEBBIAN_SEED_BASE + 200,
+        burn_in,
+        samples,
+    ));
+
+    EvidenceRow {
+        substrate: SubstrateKind::OscillatorCouplingHebbian,
+        knob: eta_coupling,
+        fixed_score,
+        dead_score,
+        live_natural_score,
+        dead_delta: dead_score - fixed_score,
+        live_natural_delta: live_natural_score - fixed_score,
+    }
+}
+
+fn evaluate_oscillator_coupling_hebbian(burn_in: usize, samples: usize) -> Vec<EvidenceRow> {
+    OSCILLATOR_COUPLING_HEBBIAN_GRID
+        .iter()
+        .map(|eta| evaluate_oscillator_coupling_hebbian_at(*eta, burn_in, samples))
+        .collect()
+}
+
+// ---------------------------------------------------------------------
 // Conductance retention-band live-DOF evaluation. T21 hypothesis: the
 // natural DOF is the retention band (correct DOF, wrong parameterisation
 // in T08). The "dead" mode is ConductancePlasticity::HebbianConductance
@@ -698,6 +817,7 @@ pub fn run_pivot(samples: usize, burn_in: usize) -> PivotOutcome {
     rows.extend(evaluate_fhn_coupling(burn_in, samples));
     rows.extend(evaluate_fhn_coupling_hebbian(burn_in, samples));
     rows.extend(evaluate_oscillator_frequency(burn_in, samples));
+    rows.extend(evaluate_oscillator_coupling_hebbian(burn_in, samples));
     rows.extend(evaluate_conductance_retention(burn_in, samples));
 
     let kinds = [
@@ -705,6 +825,7 @@ pub fn run_pivot(samples: usize, burn_in: usize) -> PivotOutcome {
         SubstrateKind::Fhn,
         SubstrateKind::FhnHebbian,
         SubstrateKind::Oscillator,
+        SubstrateKind::OscillatorCouplingHebbian,
         SubstrateKind::Conductance,
     ];
     let summaries: Vec<SubstrateSummary> = kinds
@@ -1009,20 +1130,22 @@ mod tests {
     #[test]
     fn run_pivot_smoke_emits_one_summary_per_substrate() {
         // Cheap smoke: confirm the wiring runs end-to-end and produces
-        // the expected 5-substrate summary (Lattice + Fhn +
-        // FhnHebbian [T22] + Oscillator + Conductance). Per-substrate
-        // lift/null assertions are not pinned here because the lattice
+        // the expected 6-substrate summary (Lattice + Fhn +
+        // FhnHebbian [T22] + Oscillator + OscillatorCouplingHebbian
+        // [T23 Prong B] + Conductance). Per-substrate lift/null
+        // assertions are not pinned here because the lattice
         // control's dead-delta sign depends on sample/burn-in ratio
         // (T08 evidence: dead_delta = -0.495 at 160/40). Real
-        // coverage is the actual pivot run + T21/T22 task-exit
+        // coverage is the actual pivot run + T21/T22/T23 task-exit
         // assertions.
         let outcome = run_pivot(8, 4);
-        assert_eq!(outcome.summaries.len(), 5);
+        assert_eq!(outcome.summaries.len(), 6);
         for kind in [
             SubstrateKind::Lattice,
             SubstrateKind::Fhn,
             SubstrateKind::FhnHebbian,
             SubstrateKind::Oscillator,
+            SubstrateKind::OscillatorCouplingHebbian,
             SubstrateKind::Conductance,
         ] {
             assert!(

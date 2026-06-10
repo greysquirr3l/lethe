@@ -7,6 +7,7 @@ mod fhn_coupling;
 mod fhn_coupling_hebbian;
 mod lattice;
 mod oscillator;
+mod oscillator_coupling_hebbian;
 mod oscillator_frequency;
 
 pub use conductance::{
@@ -33,6 +34,11 @@ pub use oscillator::{
     OSCILLATOR_REGRESSION, OSCILLATOR_SEED_BASE, OscillatorConfig, OscillatorPlasticity,
     OscillatorSubstrate, oscillator_regression_signature_bytes,
 };
+pub use oscillator_coupling_hebbian::{
+    OSCILLATOR_COUPLING_HEBBIAN_SEED_BASE, OscillatorCouplingHebbianConfig,
+    OscillatorCouplingHebbianSubstrate, oscillator_coupling_hebbian_signature_bytes,
+};
 pub use oscillator_frequency::{
-    OSCILLATOR_FREQUENCY_SEED_BASE, OscillatorFrequencyConfig, OscillatorFrequencySubstrate,
+    ETA_OMEGA_SWEEP, OSCILLATOR_FREQUENCY_SEED_BASE, OscillatorFrequencyConfig,
+    OscillatorFrequencySubstrate,
 };
